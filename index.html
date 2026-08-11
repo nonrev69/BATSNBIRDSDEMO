@@ -360,6 +360,27 @@
     font-size:11px; font-weight:700; color:#fff; border:1.5px solid rgba(255,255,255,.7); margin-top:1px;
   }
   .person-meta{ flex:1; min-width:0; }
+
+  /* The marker's identity, as static text. It used to be the placeholder of the
+     note input, which made a single control read as both the label and the
+     field — you couldn't tell that tapping it was how you added a comment. */
+  .marker-title{
+    font-size:13.5px; font-weight:600; color:var(--text); line-height:1.3;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .marker-field-label{
+    font-size:9.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim);
+    font-weight:600; margin:8px 0 3px;
+  }
+  .note-box{
+    display:block; width:100%; box-sizing:border-box;
+    background:#0f1216; border:1px solid var(--panel-border); border-radius:6px;
+    color:var(--text); font-family:inherit; font-size:12.5px; line-height:1.45;
+    padding:7px 9px; resize:vertical; min-height:34px; overflow:hidden;
+  }
+  .note-box::placeholder{ color:#5f6873; }
+  .note-box:focus{ outline:none; border-color:var(--accent); background:#11161c; }
+  .note-box.has-content{ border-color:#3a444f; }
   .person-name{
     background:transparent; border:none; color:var(--text); font-size:13px; padding:0;
     width:100%; font-family:inherit;
@@ -2394,7 +2415,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
       row.innerHTML = `
         <div class="person-badge" style="background:${roleColorHex(p.role)}">${p.num}</div>
         <div class="person-meta">
-          <input class="person-name" value="${p.name || ''}" placeholder="${roleLabel(p.role)} ${p.num} — add note" data-id="${p.id}">
+          <div class="marker-title">${htmlEscape(roleLabel(p.role))} ${p.num}</div>
           <div class="person-equipment-row">
             <span class="person-equipment-label">Equip.</span>
             <div class="equip-chip-list">
@@ -2408,11 +2429,15 @@ svg.leaflet-image-layer.leaflet-interactive path {
             ${roles.map(r => `<option value="${r.id}" ${r.id===p.role?'selected':''}>${htmlEscape(r.label)}</option>`).join('')}
           </select>
           ${survey ? `<div class="marker-survey-tag"><span class="swatch" style="background:${survey.color}"></span>${htmlEscape(survey.name)}</div>` : ''}
+          <div class="marker-field-label">Notes</div>
+          <textarea class="note-box person-name${p.name ? ' has-content' : ''}" rows="2"
+            placeholder="Anything worth recording about this position…"
+            data-id="${p.id}">${htmlEscape(p.name || '')}</textarea>
         </div>
         <button class="person-del" data-id="${p.id}" title="Remove">✕</button>
       `;
       row.addEventListener('click', (e)=>{
-        if(['INPUT','SELECT'].includes(e.target.tagName) || e.target.classList.contains('person-del')) return;
+        if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName) || e.target.classList.contains('person-del')) return;
         selectedId = p.id; render();
         openLightbox({role:p.role, num:p.num, name:p.name, caption: roleLabel(p.role)+' '+p.num, personRef:p, equipment:personEquipmentLabel(p)});
       });
@@ -2420,11 +2445,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
     });
 
     peopleList.querySelectorAll('.person-name').forEach(inp=>{
+      autoGrowNote(inp);
       inp.addEventListener('input', (e)=>{
         const id = e.target.getAttribute('data-id');
         const person = people.find(x=>x.id===id);
         if(person){
           person.name = e.target.value;
+          e.target.classList.toggle('has-content', !!e.target.value);
+          autoGrowNote(e.target);
           clearTimeout(inp._saveTimer);
           inp._saveTimer = setTimeout(save, 400);
         }
@@ -2472,6 +2500,17 @@ svg.leaflet-image-layer.leaflet-interactive path {
     });
   }
 
+  // Notes are free text and often run to a sentence or two; a fixed two-row box
+  // would hide the start of anything longer. Grow to fit instead of scrolling,
+  // since there's nothing below in the row that needs the space.
+  function autoGrowNote(el){
+    if(!el) return;
+    el.style.height = 'auto';
+    const h = el.scrollHeight;
+    // jsdom (and any non-layout context) reports 0 — leave the CSS min-height.
+    if(h > 0) el.style.height = Math.min(h, 220) + 'px';
+  }
+
   function renderObsList(){
     const obsListEl = document.getElementById('obsList');
     if(!obsListEl) return;
@@ -2487,16 +2526,20 @@ svg.leaflet-image-layer.leaflet-interactive path {
       row.innerHTML = `
         <div class="person-badge" style="background:${obsTypeColorHex(o.typeId)}; border-radius:4px;">${o.num}</div>
         <div class="person-meta">
-          <input class="obs-name" value="${o.name || ''}" placeholder="${htmlEscape(obsTypeLabel(o.typeId))} ${o.num} — add note" data-id="${o.id}">
+          <div class="marker-title">${htmlEscape(obsTypeLabel(o.typeId))} ${o.num}</div>
           <select class="obs-type-select" data-id="${o.id}">
             ${obsTypes.map(t => `<option value="${t.id}" ${t.id===o.typeId?'selected':''}>${htmlEscape(t.label)}</option>`).join('')}
           </select>
           ${survey ? `<div class="marker-survey-tag"><span class="swatch" style="background:${survey.color}"></span>${htmlEscape(survey.name)}</div>` : ''}
+          <div class="marker-field-label">Notes</div>
+          <textarea class="note-box obs-name${o.name ? ' has-content' : ''}" rows="2"
+            placeholder="What was seen? e.g. droppings on beam, staining at ridge…"
+            data-id="${o.id}">${htmlEscape(o.name || '')}</textarea>
         </div>
         <button class="person-del" data-id="${o.id}" title="Remove">✕</button>
       `;
       row.addEventListener('click', (e)=>{
-        if(['INPUT','SELECT'].includes(e.target.tagName) || e.target.classList.contains('person-del')) return;
+        if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName) || e.target.classList.contains('person-del')) return;
         selectedObsId = o.id; render();
         openLightbox({role:o.typeId, num:o.num, name:o.name, caption: obsTypeLabel(o.typeId)+' '+o.num, obsRef:o});
       });
@@ -2504,11 +2547,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
     });
 
     obsListEl.querySelectorAll('.obs-name').forEach(inp=>{
+      autoGrowNote(inp);
       inp.addEventListener('input', (e)=>{
         const id = e.target.getAttribute('data-id');
         const o = observations.find(x=>x.id===id);
         if(o){
           o.name = e.target.value;
+          e.target.classList.toggle('has-content', !!e.target.value);
+          autoGrowNote(e.target);
           clearTimeout(inp._saveTimer);
           inp._saveTimer = setTimeout(save, 400);
         }
