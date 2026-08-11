@@ -621,6 +621,48 @@
   .accordion-subhead:first-child{ margin-top:0; }
 
   /* ======================================================================
+     Panel width & density
+     280px was tight enough that long export labels wrapped and the note boxes
+     were barely two words wide. Everything below just buys back breathing room.
+     ====================================================================== */
+  .layers-panel{ width:340px; }
+  .accordion summary{ padding:15px 18px; }
+  .accordion-body{ padding:0 18px 20px; }
+  .layers-header{ padding:14px 18px 11px; }
+  .layer-row{ padding:11px 18px; }
+  .person-row, .media-row{ padding:12px 18px; gap:11px; }
+  .role-btn, .export-btn{ padding:11px 12px; margin-bottom:9px; }
+  .survey-chip{ padding:9px 11px; margin-bottom:8px; }
+  .accordion-subhead{ margin:20px 0 9px; }
+  .sub-legend{ padding:4px 18px 12px 42px; }
+  .note-box{ padding:8px 10px; }
+
+  /* Opt-in density for anyone who'd rather see more at once. */
+  .app.compact-rows .person-row, .app.compact-rows .media-row{ padding:8px 18px; gap:9px; }
+  .app.compact-rows .role-btn, .app.compact-rows .export-btn{ padding:8px 11px; margin-bottom:6px; }
+  .app.compact-rows .accordion summary{ padding:11px 18px; }
+  .app.compact-rows .accordion-body{ padding:0 18px 14px; }
+  .app.compact-rows .accordion-subhead{ margin:14px 0 7px; }
+  .app.compact-rows .note-box{ padding:6px 8px; font-size:12px; min-height:30px; }
+  .app.compact-rows .marker-field-label{ margin:6px 0 2px; }
+
+  /* ---- Settings popover ---- */
+  .settings-panel{
+    display:none; padding:12px 18px 14px; background:#171b20;
+    border-bottom:1px solid var(--panel-border);
+  }
+  .settings-panel.open{ display:block; }
+  .settings-row{
+    display:flex; align-items:flex-start; gap:10px; padding:7px 0; cursor:pointer;
+  }
+  .settings-row input[type=checkbox]{
+    width:16px; height:16px; accent-color:var(--accent); flex:none; margin-top:2px; cursor:pointer;
+  }
+  .settings-row .settings-text{ flex:1; min-width:0; }
+  .settings-row .settings-label{ font-size:12.5px; color:var(--text); display:block; }
+  .settings-row .settings-hint{ font-size:10.5px; color:var(--text-dim); line-height:1.4; display:block; margin-top:2px; }
+
+  /* ======================================================================
      Collapsible panel
      The map is the work surface; a permanently-parked 280px sidebar is a lot
      of screen on a laptop and most of the screen on a tablet in portrait.
@@ -684,7 +726,9 @@
   /* iPad landscape (1024px) and small laptops: the panel gets a little wider so
      the longer export button labels stop wrapping, but layout stays side-by-side. */
   @media (max-width: 1180px){
-    .layers-panel{ width:310px; }
+    /* Narrower screens can't spare 340px — pull it back, but not to the old
+       280px, which was where the note boxes stopped being usable. */
+    .layers-panel{ width:320px; }
     .basemap-search input{ width:200px; }
   }
 
@@ -1476,7 +1520,25 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <div class="layers-header">
       <span class="header-label">Layers</span>
       <span class="save-status" id="saveStatus">Not saved yet</span>
+      <button class="panel-toggle" id="settingsToggle" title="Panel settings" aria-label="Panel settings" aria-expanded="false">⚙</button>
       <button class="panel-toggle" id="panelToggle" title="Hide panel" aria-label="Hide panel" aria-expanded="true">✕</button>
+    </div>
+
+    <div class="settings-panel" id="settingsPanel">
+      <label class="settings-row">
+        <input type="checkbox" id="setAccordionExclusive" checked>
+        <span class="settings-text">
+          <span class="settings-label">One section at a time</span>
+          <span class="settings-hint">Opening a section closes the others, so the panel stays short enough to scan.</span>
+        </span>
+      </label>
+      <label class="settings-row">
+        <input type="checkbox" id="setCompactRows">
+        <span class="settings-text">
+          <span class="settings-label">Compact rows</span>
+          <span class="settings-hint">Tighter spacing — fits more markers on screen at the cost of some breathing room.</span>
+        </span>
+      </label>
     </div>
 
     <details class="accordion">
@@ -5201,6 +5263,20 @@ svg.leaflet-image-layer.leaflet-interactive path {
   // two or three sections at the start of every visit. Keyed by section label
   // rather than index so adding a section later doesn't shuffle the mapping.
   const ACCORDION_KEY = 'personnel-layer-accordion-state';
+  const SETTINGS_KEY = 'personnel-layer-panel-settings';
+
+  const panelSettings = (function(){
+    const defaults = { exclusiveSections: true, compactRows: false };
+    try{
+      const raw = Store.getItem(SETTINGS_KEY);
+      return raw ? { ...defaults, ...(JSON.parse(raw) || {}) } : { ...defaults };
+    }catch(e){ return { ...defaults }; }
+  })();
+
+  function savePanelSettings(){
+    try{ Store.setItem(SETTINGS_KEY, JSON.stringify(panelSettings)); }catch(e){ /* non-critical */ }
+  }
+
   function accordionKeyFor(det){
     const sum = det.querySelector('summary');
     if(!sum) return null;
@@ -5210,29 +5286,72 @@ svg.leaflet-image-layer.leaflet-interactive path {
     const label = (clone.textContent || '').trim();
     return label || null;
   }
-  function initAccordionMemory(){
-    const dets = Array.from(document.querySelectorAll('details.accordion'));
-    let state = {};
+
+  function readAccordionState(){
     try{
       const raw = Store.getItem(ACCORDION_KEY);
-      if(raw) state = JSON.parse(raw) || {};
-    }catch(e){ state = {}; }
+      return raw ? (JSON.parse(raw) || {}) : {};
+    }catch(e){ return {}; }
+  }
+
+  function initAccordionMemory(){
+    const dets = Array.from(document.querySelectorAll('details.accordion'));
+    const state = readAccordionState();
+    // Closing siblings programmatically fires their own toggle events; without
+    // this guard each one would write back to storage mid-update and we'd race
+    // ourselves into an inconsistent saved state.
+    let suppress = false;
+
+    function closeOthers(except){
+      suppress = true;
+      dets.forEach(d => { if(d !== except && d.open) d.open = false; });
+      suppress = false;
+    }
+
     dets.forEach(det=>{
       const key = accordionKeyFor(det);
       if(!key) return;
       if(state[key] === true) det.open = true;
       else if(state[key] === false) det.open = false;
+    });
+
+    // If several were remembered open but exclusive mode is now on, keep only
+    // the first rather than dumping the whole panel open on startup.
+    if(panelSettings.exclusiveSections){
+      const open = dets.filter(d => d.open);
+      if(open.length > 1) closeOthers(open[0]);
+    }
+
+    dets.forEach(det=>{
       det.addEventListener('toggle', ()=>{
-        const k = accordionKeyFor(det);
-        if(!k) return;
-        let cur = {};
-        try{
-          const raw = Store.getItem(ACCORDION_KEY);
-          if(raw) cur = JSON.parse(raw) || {};
-        }catch(e){ cur = {}; }
-        cur[k] = det.open;
+        if(suppress) return;
+        if(det.open && panelSettings.exclusiveSections) closeOthers(det);
+        const cur = readAccordionState();
+        dets.forEach(d=>{
+          const k = accordionKeyFor(d);
+          if(k) cur[k] = d.open;
+        });
         try{ Store.setItem(ACCORDION_KEY, JSON.stringify(cur)); }catch(e){ /* non-critical */ }
       });
+    });
+
+    return { closeOthers, dets };
+  }
+
+  // ---- Settings ------------------------------------------------------------
+  const settingsToggle = document.getElementById('settingsToggle');
+  const settingsPanel = document.getElementById('settingsPanel');
+  const setAccordionExclusive = document.getElementById('setAccordionExclusive');
+  const setCompactRows = document.getElementById('setCompactRows');
+
+  function applyCompactRows(){
+    document.querySelector('.app').classList.toggle('compact-rows', !!panelSettings.compactRows);
+  }
+
+  if(settingsToggle && settingsPanel){
+    settingsToggle.addEventListener('click', ()=>{
+      const open = settingsPanel.classList.toggle('open');
+      settingsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     });
   }
   // ---- Panel collapse ------------------------------------------------------
@@ -5278,7 +5397,30 @@ svg.leaflet-image-layer.leaflet-interactive path {
     if(Store.getItem(PANEL_KEY) === '1') setPanelHidden(true, false);
   }catch(e){ /* default: visible */ }
 
-  initAccordionMemory();
+  const accordionCtl = initAccordionMemory();
+  applyCompactRows();
+
+  if(setAccordionExclusive){
+    setAccordionExclusive.checked = !!panelSettings.exclusiveSections;
+    setAccordionExclusive.addEventListener('change', ()=>{
+      panelSettings.exclusiveSections = setAccordionExclusive.checked;
+      savePanelSettings();
+      // Turning it on with several already open should tidy up immediately
+      // rather than waiting for the next time a section is clicked.
+      if(panelSettings.exclusiveSections && accordionCtl){
+        const open = accordionCtl.dets.filter(d => d.open);
+        if(open.length > 1) accordionCtl.closeOthers(open[0]);
+      }
+    });
+  }
+  if(setCompactRows){
+    setCompactRows.checked = !!panelSettings.compactRows;
+    setCompactRows.addEventListener('change', ()=>{
+      panelSettings.compactRows = setCompactRows.checked;
+      savePanelSettings();
+      applyCompactRows();
+    });
+  }
 
   // Tell the truth about persistence rather than promising it unconditionally.
   if(!Store.persistent){
