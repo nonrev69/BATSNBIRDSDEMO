@@ -674,6 +674,15 @@
     border-bottom:1px solid var(--panel-border);
   }
   .settings-panel.open{ display:block; }
+  .settings-divider{
+    height:1px; background:var(--panel-border); margin:12px 0 11px;
+  }
+  .settings-subhead{
+    font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim);
+    font-weight:600; margin-bottom:9px;
+  }
+  .settings-danger-note{ margin-top:4px; }
+  .settings-panel .export-btn{ margin-bottom:7px; }
   .settings-row{
     display:flex; align-items:flex-start; gap:10px; padding:7px 0; cursor:pointer;
   }
@@ -689,10 +698,14 @@
      The map is the work surface; a permanently-parked 280px sidebar is a lot
      of screen on a laptop and most of the screen on a tablet in portrait.
      ====================================================================== */
+  /* Sized to sit alongside the map controls (Go / Map / Satellite / Fit) rather
+     than reading as small secondary text — ~30% up on the original 13px/4px. */
   .panel-toggle{
     background:none; border:1px solid var(--panel-border); border-radius:6px;
-    color:var(--text-dim); cursor:pointer; font-size:13px; line-height:1;
-    padding:4px 7px; flex:none;
+    color:var(--text-dim); cursor:pointer; font-size:17px; line-height:1;
+    padding:6px 10px; flex:none;
+    display:inline-flex; align-items:center; justify-content:center;
+    min-width:32px; min-height:32px;
   }
   .panel-toggle:hover{ border-color:var(--accent); color:var(--text); }
   .layers-header .header-label{ flex:1; }
@@ -734,7 +747,7 @@
     .file-drop{ padding:18px 12px; }
     .zoom-controls button{ width:44px; height:44px; font-size:19px; }
     .zoom-controls button:last-of-type{ font-size:16px; }
-    .panel-toggle{ padding:8px 11px; font-size:15px; }
+    .panel-toggle{ padding:9px 12px; font-size:19px; min-width:42px; min-height:42px; }
     .panel-reopen{ padding:11px 15px; font-size:13.5px; }
     .role-remove{ padding:8px 10px; font-size:16px; }
     .reset-link{ padding:4px 2px; }
@@ -1562,6 +1575,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <span class="settings-hint">Tighter spacing — fits more markers on screen at the cost of some breathing room.</span>
         </span>
       </label>
+
+      <div class="settings-divider"></div>
+      <div class="settings-subhead">Start over</div>
+      <button class="export-btn danger" id="clearMarkersBtn">Clear all markers</button>
+      <button class="export-btn danger" id="clearProjectBtn">Clear everything and start a new project</button>
+      <div class="settings-hint settings-danger-note">Clearing markers keeps your roles, observation types, equipment and surveys so you can re-survey the same site. Clearing everything resets the tool to how it was on first use. Neither can be undone — save a .json backup first if there's any doubt.</div>
     </div>
 
     <details class="accordion">
@@ -1765,10 +1784,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="export-btn" id="exportCsvBtn">⬇ Marker list (CSV)</button>
         <div class="export-note" id="exportNote">Upload site imagery to enable the annotated image export.</div>
 
-        <div class="accordion-subhead">Start over</div>
-        <button class="export-btn danger" id="clearMarkersBtn">Clear all markers</button>
-        <button class="export-btn danger" id="clearProjectBtn">Clear everything and start a new project</button>
-        <div class="export-note">Clearing markers keeps your roles, observation types, equipment and surveys so you can re-survey the same site. Clearing everything resets the tool to how it was on first use. Neither can be undone — save a .json backup first if there's any doubt.</div>
       </div>
     </details>
 
