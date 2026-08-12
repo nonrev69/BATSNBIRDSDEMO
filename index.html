@@ -72,6 +72,18 @@
     font-size:13px; padding:0 14px; cursor:pointer;
   }
   .basemap-search button:hover{ filter:brightness(1.1); }
+  .export-btn.danger{
+    border-color:#4a2d2d; color:#e08585;
+  }
+  .export-btn.danger:hover:not(:disabled){
+    border-color:var(--assistant); background:#2a1a1a; color:#ff9d9d;
+  }
+  .basemap-search .fit-btn{
+    background:#11151a; color:var(--text); border:1px solid var(--panel-border);
+    font-weight:500; font-size:12.5px; padding:0 11px;
+  }
+  .basemap-search .fit-btn:hover:not(:disabled){ background:#171b20; border-color:var(--accent); filter:none; }
+  .basemap-search .fit-btn:disabled{ opacity:.4; cursor:default; }
   .basemap-layer-toggle{
     display:flex; border:1px solid var(--panel-border); border-radius:5px; overflow:hidden;
   }
@@ -474,7 +486,7 @@
   /* ---- Photo lightbox ---- */
   .lightbox-backdrop{
     position:fixed; inset:0; background:rgba(8,10,12,.72);
-    display:none; align-items:center; justify-content:center; z-index:50;
+    display:none; align-items:center; justify-content:center; z-index:4000; /* see z-index scale note */
   }
   .lightbox-backdrop.open{ display:flex; }
   .lightbox{
@@ -519,10 +531,20 @@
   }
   .lightbox-delete:hover{ background:var(--assistant); color:#fff; }
 
-  /* ---- Confirm-delete modal ---- */
+  /* ---- Confirm-delete modal ----
+     z-index scale for this file, because getting this wrong is invisible until
+     you're in basemap mode. Leaflet sets its own stacking internally: map panes
+     run 400–700 and its controls sit at 800. Anything of ours that must appear
+     over the map therefore has to clear 800 — the modals were at 50 and 60,
+     which worked fine over a static image and was silently swallowed by the
+     live map.
+       map overlays (search, legend)  1000–1100
+       lightbox                       4000
+       confirm modal                  5000
+  */
   .confirm-backdrop{
     position:fixed; inset:0; background:rgba(8,10,12,.72);
-    display:none; align-items:center; justify-content:center; z-index:60;
+    display:none; align-items:center; justify-content:center; z-index:5000; /* above the lightbox: confirms can open over it */
   }
   .confirm-backdrop.open{ display:flex; }
   .confirm-modal{
@@ -1500,6 +1522,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <button id="basemapLayerStreetBtn" class="active" title="Street map">Map</button>
           <button id="basemapLayerAerialBtn" title="Aerial/satellite imagery">Satellite</button>
         </div>
+        <button id="basemapFitBtn" class="fit-btn" title="Zoom to fit all pins and boundaries (F)">⤢ Fit</button>
       </div>
       <div id="basemapMap"></div>
     </div>
@@ -1741,6 +1764,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="export-btn" id="exportWordBtn" disabled>⬇ Word document (.doc)</button>
         <button class="export-btn" id="exportCsvBtn">⬇ Marker list (CSV)</button>
         <div class="export-note" id="exportNote">Upload site imagery to enable the annotated image export.</div>
+
+        <div class="accordion-subhead">Start over</div>
+        <button class="export-btn danger" id="clearMarkersBtn">Clear all markers</button>
+        <button class="export-btn danger" id="clearProjectBtn">Clear everything and start a new project</button>
+        <div class="export-note">Clearing markers keeps your roles, observation types, equipment and surveys so you can re-survey the same site. Clearing everything resets the tool to how it was on first use. Neither can be undone — save a .json backup first if there's any doubt.</div>
       </div>
     </details>
 
@@ -3177,6 +3205,13 @@ svg.leaflet-image-layer.leaflet-interactive path {
     renderObsList();
     renderEquipmentChips();
     updateAccordionCounts();
+    updateFitBtn();
+    const cmBtn = document.getElementById('clearMarkersBtn');
+    if(cmBtn){
+      const n = people.length + observations.length + importedMedia.length;
+      cmBtn.disabled = n === 0;
+      cmBtn.title = n === 0 ? 'No markers to clear' : `Removes all ${n} marker${n===1?'':'s'}`;
+    }
     updateHint();
   }
 
@@ -3283,9 +3318,80 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
   let basemapStreetLayer = null, basemapAerialLayer = null, basemapLayerType = 'street';
 
+  // ---- Map view memory & fit ----------------------------------------------
+  const VIEW_KEY = 'personnel-layer-map-view';
+
+  function readSavedView(){
+    try{
+      const raw = Store.getItem(VIEW_KEY);
+      if(!raw) return null;
+      const v = JSON.parse(raw);
+      // Guard against a corrupt or half-written entry putting the map at NaN,
+      // which Leaflet accepts and then renders as a blank grey void.
+      if(!v || typeof v.lat !== 'number' || typeof v.lng !== 'number' || typeof v.zoom !== 'number') return null;
+      if(!isFinite(v.lat) || !isFinite(v.lng) || !isFinite(v.zoom)) return null;
+      if(Math.abs(v.lat) > 90 || Math.abs(v.lng) > 180) return null;
+      return v;
+    }catch(e){ return null; }
+  }
+
+  function saveMapView(){
+    if(!basemap) return;
+    try{
+      const c = basemap.getCenter();
+      Store.setItem(VIEW_KEY, JSON.stringify({ lat:c.lat, lng:c.lng, zoom:basemap.getZoom() }));
+    }catch(e){ /* non-critical */ }
+  }
+
+  // Every lat/lng the survey knows about: personnel, observations, geotagged
+  // media, and boundary vertices.
+  function allWorkLatLngs(){
+    const pts = [];
+    people.forEach(p=>{ if(p.lat !== undefined && p.lng !== undefined) pts.push([p.lat, p.lng]); });
+    observations.forEach(o=>{ if(o.lat !== undefined && o.lng !== undefined) pts.push([o.lat, o.lng]); });
+    importedMedia.forEach(m=>{ if(m.x === undefined && m.lat !== undefined && m.lon !== undefined) pts.push([m.lat, m.lon]); });
+    surveys.forEach(s=>{
+      if(s.boundary && !boundaryIsImageMode(s.boundary)){
+        s.boundary.forEach(p=>{ if(p.lat !== undefined && p.lng !== undefined) pts.push([p.lat, p.lng]); });
+      }
+    });
+    return pts;
+  }
+
+  function fitToWork(){
+    if(!basemap) return false;
+    const pts = allWorkLatLngs();
+    if(!pts.length) return false;
+    if(pts.length === 1){
+      // fitBounds on a zero-area bounds snaps to max zoom, which is jarring —
+      // for a lone pin just centre at a sensible working scale.
+      basemap.setView(pts[0], Math.max(basemap.getZoom(), 17));
+    } else {
+      basemap.fitBounds(L.latLngBounds(pts), { padding:[60,60], maxZoom:18 });
+    }
+    saveMapView();
+    return true;
+  }
+
+  function updateFitBtn(){
+    const btn = document.getElementById('basemapFitBtn');
+    if(!btn) return;
+    const n = allWorkLatLngs().length;
+    btn.disabled = n === 0;
+    btn.title = n === 0
+      ? 'Nothing placed on the map yet'
+      : 'Zoom to fit all pins and boundaries (F)';
+  }
+
   function initBasemap(){
     if(basemap) return basemap;
-    basemap = L.map(basemapMapEl, { zoomControl:true, attributionControl:true }).setView([52.5, -1.9], 6); // central England default
+    // Restore wherever the user last was. Previously this always opened at a
+    // UK-wide zoom 6, so after every reload you had to find your site again —
+    // which is a lot of panning when your pins are a few hundred metres across.
+    const savedView = readSavedView();
+    basemap = L.map(basemapMapEl, { zoomControl:true, attributionControl:true })
+      .setView(savedView ? [savedView.lat, savedView.lng] : [52.5, -1.9],
+               savedView ? savedView.zoom : 6); // central England default
 
     basemapStreetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, crossOrigin: true, referrerPolicy: 'strict-origin-when-cross-origin',
@@ -3296,6 +3402,16 @@ svg.leaflet-image-layer.leaflet-interactive path {
       attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS community'
     });
     basemapStreetLayer.addTo(basemap);
+
+    // moveend covers pan and zoom alike, and only fires once the gesture has
+    // settled, so this isn't writing to storage on every animation frame.
+    basemap.on('moveend', saveMapView);
+
+    // If there's already work on the map but no remembered view (first load
+    // after importing a project, say), frame the work rather than the country.
+    if(!savedView){
+      setTimeout(()=>{ try{ fitToWork(); }catch(e){ /* nothing placed yet */ } }, 0);
+    }
 
     basemap.on('click', (e)=>{
       const { lat, lng } = e.latlng;
@@ -5396,6 +5512,90 @@ svg.leaflet-image-layer.leaflet-interactive path {
   try{
     if(Store.getItem(PANEL_KEY) === '1') setPanelHidden(true, false);
   }catch(e){ /* default: visible */ }
+
+  const basemapFitBtn = document.getElementById('basemapFitBtn');
+  if(basemapFitBtn) basemapFitBtn.addEventListener('click', ()=> fitToWork());
+
+  document.addEventListener('keydown', (e)=>{
+    if(e.key !== 'f' && e.key !== 'F') return;
+    if(e.ctrlKey || e.metaKey || e.altKey) return;
+    // Don't steal the key while someone is typing a note or a site name.
+    const t = e.target;
+    if(t && (['INPUT','TEXTAREA','SELECT'].includes(t.tagName) || t.isContentEditable)) return;
+    if(fitToWork()) e.preventDefault();
+  });
+
+  // ---- Start over ----------------------------------------------------------
+  // Two levels deliberately. Re-surveying the same site is common, and losing
+  // your custom roles, observation types and equipment list every time you want
+  // a clean sheet of pins would be a real irritation.
+  function revokeMediaUrls(){
+    importedMedia.forEach(m=>{
+      if(m.thumbUrl && typeof m.thumbUrl === 'string' && m.thumbUrl.startsWith('blob:')){
+        try{ URL.revokeObjectURL(m.thumbUrl); }catch(e){ /* already gone */ }
+      }
+    });
+  }
+
+  function clearAllMarkers(){
+    revokeMediaUrls();
+    people = [];
+    observations = [];
+    importedMedia = [];
+    counters = {};
+    obsCounters = {};
+    selectedId = null;
+    selectedObsId = null;
+    // A boundary being drawn when the clear happens would otherwise carry on
+    // with a half-finished vertex list against a survey that still exists.
+    drawingBoundary = false;
+    boundaryDraft = [];
+    updateBoundaryControls();
+    save();
+    render();
+  }
+
+  function clearWholeProject(){
+    clearAllMarkers();
+    surveys = [];
+    activeSurveyId = null;
+    equipment = [];
+    roles = DEFAULT_ROLES.map(r=>({...r}));
+    obsTypes = DEFAULT_OBS_TYPES.map(t=>({...t}));
+    projectMeta = { surveyType: '', location: '' };
+    surveyTypeSelect.value = '';
+    siteLocationInput.value = '';
+    resetToMock();
+    // Drop the remembered map view too — a new project at a different site
+    // shouldn't open framed on the last one.
+    try{ Store.setItem(VIEW_KEY, ''); }catch(e){ /* non-critical */ }
+    save();
+    render();
+  }
+
+  const clearMarkersBtn = document.getElementById('clearMarkersBtn');
+  const clearProjectBtn = document.getElementById('clearProjectBtn');
+
+  if(clearMarkersBtn){
+    clearMarkersBtn.addEventListener('click', ()=>{
+      const n = people.length + observations.length + importedMedia.length;
+      if(n === 0) return; // button is disabled in this state anyway
+      openConfirmModal({
+        title: 'Clear all markers?',
+        message: `This removes ${n} marker${n===1?'':'s'} — personnel, observations and photo pins. Your surveys, roles, observation types and equipment list are kept. This can't be undone.`,
+        onConfirm: clearAllMarkers
+      });
+    });
+  }
+  if(clearProjectBtn){
+    clearProjectBtn.addEventListener('click', ()=>{
+      openConfirmModal({
+        title: 'Start a new project?',
+        message: 'This clears everything — markers, surveys, boundaries, equipment, custom roles and observation types, site details and any uploaded imagery. The tool resets to how it was on first use. This can\'t be undone.',
+        onConfirm: clearWholeProject
+      });
+    });
+  }
 
   const accordionCtl = initAccordionMemory();
   applyCompactRows();
